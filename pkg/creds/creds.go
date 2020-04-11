@@ -11,6 +11,7 @@ type LoginDetails struct {
 	MFAToken     string
 	DuoMFAOption string
 	URL          string
+	APIURL       string
 	StateToken   string // used by Okta
 }
 

@@ -46,6 +46,12 @@ func PromptForConfigurationDetails(idpAccount *cfg.IDPAccount) error {
 		fmt.Println("")
 		idpAccount.Subdomain = prompter.String("Subdomain", idpAccount.Subdomain)
 		fmt.Println("")
+		idpAccount.ClientID = prompter.String("ClientId", idpAccount.ClientID)
+		fmt.Println("")
+		idpAccount.ClientSecret = prompter.String("ClientSecret", idpAccount.ClientSecret)
+		fmt.Println("")
+		idpAccount.APIURL = prompter.String("API URL", idpAccount.APIURL)
+		fmt.Println("")
 	case "F5APM":
 		idpAccount.ResourceID = prompter.String("Resource ID", idpAccount.ResourceID)
 	case "AzureAD":

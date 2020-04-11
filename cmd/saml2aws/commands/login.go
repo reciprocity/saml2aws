@@ -128,7 +128,7 @@ func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFla
 
 	// fmt.Printf("loginFlags %+v\n", loginFlags)
 
-	loginDetails := &creds.LoginDetails{URL: account.URL, Username: account.Username, MFAToken: loginFlags.CommonFlags.MFAToken, DuoMFAOption: loginFlags.DuoMFAOption}
+	loginDetails := &creds.LoginDetails{URL: account.URL, Username: account.Username, MFAToken: loginFlags.CommonFlags.MFAToken, DuoMFAOption: loginFlags.DuoMFAOption, ClientID: account.ClientID, ClientSecret: account.ClientSecret, APIURL: account.APIURL}
 
 	fmt.Printf("Using IDP Account %s to access %s %s\n", loginFlags.CommonFlags.IdpAccount, account.Provider, account.URL)
 
@@ -154,7 +154,7 @@ func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFla
 		loginDetails.Password = loginFlags.CommonFlags.Password
 	}
 
-	// if you supply a cleint_id in a flag it takes precedence
+	// if you supply a client_id in a flag it takes precedence
 	if loginFlags.CommonFlags.ClientID != "" {
 		loginDetails.ClientID = loginFlags.CommonFlags.ClientID
 	}
