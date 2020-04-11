@@ -32,8 +32,11 @@ const (
 type IDPAccount struct {
 	AppID                string `ini:"app_id"` // used by OneLogin and AzureAD
 	URL                  string `ini:"url"`
+	APIURL               string `ini:"api_url"`
 	Username             string `ini:"username"`
 	Provider             string `ini:"provider"`
+	ClientID             string `ini:"client_id"`
+	ClientSecret         string `ini:"client_secret"`
 	MFA                  string `ini:"mfa"`
 	SkipVerify           bool   `ini:"skip_verify"`
 	Timeout              int    `ini:"timeout"`
@@ -72,7 +75,9 @@ func (ia IDPAccount) String() string {
   SessionDuration: %d
   Profile: %s
   RoleARN: %s
-}`, appID, policyID, ia.URL, ia.Username, ia.Provider, ia.MFA, ia.SkipVerify, ia.AmazonWebservicesURN, ia.SessionDuration, ia.Profile, ia.RoleARN)
+  ClientID: %s
+  ClientSecret: %s
+}`, appID, policyID, ia.URL, ia.Username, ia.Provider, ia.MFA, ia.SkipVerify, ia.AmazonWebservicesURN, ia.SessionDuration, ia.Profile, ia.RoleARN, ia.ClientID, ia.ClientSecret)
 }
 
 // Validate validate the required / expected fields are set

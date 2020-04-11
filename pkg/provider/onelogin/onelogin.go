@@ -25,6 +25,7 @@ const (
 	IdentifierSmsMfa             = "OneLogin SMS"
 	IdentifierTotpMfa            = "Google Authenticator"
 	IdentifierYubiKey            = "Yubico YubiKey"
+	IdentifierDuo                = "Duo Duo Security"
 
 	MessageMFARequired = "MFA is required for this user"
 	MessageSuccess     = "Success"
@@ -43,6 +44,7 @@ var (
 		IdentifierSmsMfa:             "SMS",
 		IdentifierTotpMfa:            "TOTP",
 		IdentifierYubiKey:            "YUBIKEY",
+		IdentifierDuo:                "DUO",
 	}
 )
 
@@ -88,7 +90,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 
 // Authenticate logs into OneLogin and returns a SAML response.
 func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) {
-	providerURL, err := url.Parse(loginDetails.URL)
+	providerURL, err := url.Parse(loginDetails.APIURL)
 	if err != nil {
 		return "", errors.Wrap(err, "error building providerURL")
 	}
@@ -101,6 +103,10 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 		return "", errors.Wrap(err, "failed to generate oauth token")
 	}
 
+	if oauthToken == "" {
+		return "", errors.Wrap(err, "failed to generate oauth token")
+	}
+
 	logger.Debug("Retrieved OneLogin OAuth token:", oauthToken)
 
 	authReq := AuthRequest{Username: loginDetails.Username, Password: loginDetails.Password, AppID: c.AppID, Subdomain: c.Subdomain}
@@ -110,7 +116,7 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 		return "", errors.Wrap(err, "error encoding authreq")
 	}
 
-	authSubmitURL := fmt.Sprintf("https://%s/api/1/saml_assertion", host)
+	authSubmitURL := fmt.Sprintf("https://%s/api/2/saml_assertion", host)
 
 	req, err := http.NewRequest("POST", authSubmitURL, &authBody)
 	if err != nil {
@@ -122,7 +128,7 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 
 	logger.Debug("Requesting SAML Assertion")
 
-	// request the SAML assertion. For more details check https://developers.onelogin.com/api-docs/1/saml-assertions/generate-saml-assertion
+	// request the SAML assertion. For more details check https://developers.onelogin.com/api-docs/2/saml-assertions/generate-saml-assertion
 	res, err := c.Client.Do(req)
 	if err != nil {
 		return "", errors.Wrap(err, "error retrieving auth response")
@@ -134,18 +140,16 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 		return "", errors.Wrap(err, "error retrieving body from response")
 	}
 
+	if res.StatusCode != 200 {
+		return "", errors.New("SAML Request failed")
+	}
+
 	resp := string(body)
 
 	logger.Debug("SAML Assertion response code:", res.StatusCode)
 	logger.Debug("SAML Assertion response body:", resp)
 
-	authError := gjson.Get(resp, "status.error").Bool()
-	authMessage := gjson.Get(resp, "status.message").String()
-	authType := gjson.Get(resp, "status.type").String()
-	if authError || authType != TypeSuccess {
-		return "", errors.New(authMessage)
-	}
-
+	authMessage := gjson.Get(resp, "message").String()
 	authData := gjson.Get(resp, "data")
 	var samlAssertion string
 	switch authMessage {
@@ -156,7 +160,8 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 		}
 		samlAssertion = authData.String()
 	case MessageMFARequired:
-		if !authData.IsArray() {
+		devices := gjson.Get(resp, "devices")
+		if !devices.IsArray() {
 			return "", errors.New("invalid MFA data returned")
 		}
 		logger.Debug("Verifying MFA")
@@ -172,18 +177,22 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 }
 
 // generateToken is used to generate access token for all OneLogin APIs.
-// For more infor read https://developers.onelogin.com/api-docs/1/oauth20-tokens/generate-tokens-2
+// For more info read https://developers.onelogin.com/api-docs/1/oauth20-tokens/generate-tokens-2
 func generateToken(oc *Client, loginDetails *creds.LoginDetails, host string) (string, error) {
 	oauthTokenURL := fmt.Sprintf("https://%s/auth/oauth2/v2/token", host)
+	logger.Debug("oauthTokenURL: ", oauthTokenURL)
 	req, err := http.NewRequest("POST", oauthTokenURL, strings.NewReader(`{"grant_type":"client_credentials"}`))
 	if err != nil {
 		return "", errors.Wrap(err, "error building oauth token request")
 	}
 
 	addContentHeaders(req)
-	req.SetBasicAuth(loginDetails.ClientID, loginDetails.ClientSecret)
+	req.Header.Add("Authorization", fmt.Sprintf("client_id:%s, client_secret:%s", loginDetails.ClientID, loginDetails.ClientSecret))
 	res, err := oc.Client.Do(req)
 	if err != nil {
+		return "", errors.Wrap(err, "error retrieving oauth token response")
+	}
+	if res.StatusCode >= 400 {
 		return "", errors.Wrap(err, "error retrieving oauth token response")
 	}
 
@@ -192,7 +201,6 @@ func generateToken(oc *Client, loginDetails *creds.LoginDetails, host string) (s
 		return "", errors.Wrap(err, "error reading oauth token response")
 	}
 	defer res.Body.Close()
-
 	return gjson.Get(string(body), "access_token").String(), nil
 }
 
@@ -208,12 +216,12 @@ func addContentHeaders(r *http.Request) {
 // verifyMFA is used to either prompt to user for one time password or request approval using push notification.
 // For more details check https://developers.onelogin.com/api-docs/1/saml-assertions/verify-factor
 func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
-	stateToken := gjson.Get(resp, "data.0.state_token").String()
+	stateToken := gjson.Get(resp, "state_token").String()
 	// choose an mfa option if there are multiple enabled
 	var option int
 	var mfaOptions []string
 	var preselected bool
-	for n, id := range gjson.Get(resp, "data.0.devices.#.device_type").Array() {
+	for n, id := range gjson.Get(resp, "devices.#.device_type").Array() {
 		identifier := id.String()
 		if val, ok := supportedMfaOptions[identifier]; ok {
 			mfaOptions = append(mfaOptions, val)
@@ -231,10 +239,10 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 		option = prompter.Choose("Select which MFA option to use", mfaOptions)
 	}
 
-	factorID := gjson.Get(resp, fmt.Sprintf("data.0.devices.%d.device_id", option)).String()
-	callbackURL := gjson.Get(resp, "data.0.callback_url").String()
-	mfaIdentifer := gjson.Get(resp, fmt.Sprintf("data.0.devices.%d.device_type", option)).String()
-	mfaDeviceID := gjson.Get(resp, fmt.Sprintf("data.0.devices.%d.device_id", option)).String()
+	factorID := gjson.Get(resp, fmt.Sprintf("devices.%d.device_id", option)).String()
+	callbackURL := gjson.Get(resp, "callback_url").String()
+	mfaIdentifer := gjson.Get(resp, fmt.Sprintf("devices.%d.device_type", option)).String()
+	mfaDeviceID := gjson.Get(resp, fmt.Sprintf("devices.%d.device_id", option)).String()
 
 	logger.WithField("factorID", factorID).WithField("callbackURL", callbackURL).WithField("mfaIdentifer", mfaIdentifer).Debug("MFA")
 
@@ -244,9 +252,9 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 
 	switch mfaIdentifer {
 	// These MFA options doesn't need additional request (e.g. to send SMS or a push notification etc) since the user can generate the code using their MFA app of choice.
-	case IdentifierTotpMfa, IdentifierYubiKey: 
+	case IdentifierTotpMfa, IdentifierYubiKey:
 		break
-	
+
 	default:
 		var verifyBody bytes.Buffer
 		err := json.NewEncoder(&verifyBody).Encode(VerifyRequest{AppID: appID, DeviceID: mfaDeviceID, StateToken: stateToken})
@@ -278,7 +286,7 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 	}
 
 	switch mfaIdentifer {
-	case IdentifierSmsMfa, IdentifierTotpMfa, IdentifierYubiKey:
+	case IdentifierSmsMfa, IdentifierTotpMfa, IdentifierYubiKey, IdentifierDuo:
 		verifyCode := prompter.StringRequired("Enter verification code")
 		var verifyBody bytes.Buffer
 		json.NewEncoder(&verifyBody).Encode(VerifyRequest{AppID: appID, DeviceID: mfaDeviceID, StateToken: stateToken, OTPToken: verifyCode})
